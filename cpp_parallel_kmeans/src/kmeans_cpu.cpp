@@ -1,4 +1,4 @@
-#include "include/kmeans_cpu.h"
+#include "kmeans_cpu.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>

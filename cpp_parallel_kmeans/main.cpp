@@ -2,14 +2,14 @@
 #include <string>
 #include <vector>
 #include <memory>
-#include "include/dataset.h"
-#include "include/kmeans_base.h"
-#include "include/kmeans_cuda.h"
-#include "include/kmeans_cpu.h"
-#include "include/timer.h"
-#include "include/experiments_config.h"
-#include "include/experiment_suite.h"
-#include "include/json_writer.h"
+#include "dataset.h"
+#include "kmeans_base.h"
+#include "kmeans_cuda.h"
+#include "kmeans_cpu.h"
+#include "timer.h"
+#include "experiments_config.h"
+#include "experiment_suite.h"
+#include "json_writer.h"
 
 void print_usage(const char* program_name) {
     std::cout << "Использование: " << program_name << " <mode> [options]" << std::endl;

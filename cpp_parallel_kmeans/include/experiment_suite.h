@@ -39,7 +39,9 @@ private:
     double max_seconds_;
     
     std::vector<std::string> get_gpu_implementations();
+    std::vector<std::string> get_all_implementations();
     std::function<KMeansBase*(int, int, double)> get_implementation_factory(const std::string& impl_name);
+    std::string find_dataset_path(const std::string& relative_path);
     std::vector<std::map<std::string, std::string>> format_result(
         ExperimentId exp_id,
         const std::string& impl_name,

@@ -1,5 +1,6 @@
 #include "../include/experiment_suite.h"
 #include "../include/kmeans_cuda.h"
+#include "../include/kmeans_cpu.h"
 #include "../include/experiments_config.h"
 #include <iostream>
 #include <sstream>
@@ -7,6 +8,13 @@
 #include <algorithm>
 #include <map>
 #include <string>
+#include <fstream>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#include <limits.h>
+#endif
 
 ExperimentSuite::ExperimentSuite(std::function<KMeansBase*(int, int, double)> model_factory,
                                  bool gpu_only,
@@ -18,8 +26,50 @@ std::vector<std::string> ExperimentSuite::get_gpu_implementations() {
     return {"cpp_cuda_v1", "cpp_cuda_v2", "cpp_cuda_v3", "cpp_cuda_v4"};
 }
 
+std::vector<std::string> ExperimentSuite::get_all_implementations() {
+    if (gpu_only_) {
+        return get_gpu_implementations();
+    }
+    // Возвращаем все реализации: CPU однопоточная, CPU OpenMP, затем GPU
+    return {"cpp_cpu", "cpp_cpu_openmp", "cpp_cuda_v1", "cpp_cuda_v2", "cpp_cuda_v3", "cpp_cuda_v4"};
+}
+
+std::string ExperimentSuite::find_dataset_path(const std::string& relative_path) {
+    // Список возможных базовых путей (относительно разных мест запуска)
+    // Структура: корень_репозитория/x64/Debug/ (отсюда запускается)
+    //            корень_репозитория/cpp_parallel_kmeans/datasets/ (здесь датасеты)
+    std::vector<std::string> base_paths = {
+        "../cpp_parallel_kmeans/datasets/",     // Из x64/Debug/ (основной путь)
+        "../../cpp_parallel_kmeans/datasets/",   // Альтернативный путь
+        "cpp_parallel_kmeans/datasets/",        // Из корня репозитория
+        "../datasets/",                         // Из cpp_parallel_kmeans/
+        "datasets/",                            // Если запускается из cpp_parallel_kmeans/
+        "../../datasets/"                       // Старый путь (для совместимости)
+    };
+    
+    for (const std::string& base : base_paths) {
+        std::string full_path = base + relative_path;
+        std::ifstream test(full_path);
+        if (test.good()) {
+            test.close();
+            return full_path;
+        }
+    }
+    
+    // Если не найден, возвращаем исходный путь
+    return relative_path;
+}
+
 std::function<KMeansBase*(int, int, double)> ExperimentSuite::get_implementation_factory(const std::string& impl_name) {
-    if (impl_name == "cpp_cuda_v1") {
+    if (impl_name == "cpp_cpu") {
+        return [](int n_clusters, int n_iters, double tol) {
+            return createKMeansCPU(n_clusters, n_iters, tol);
+        };
+    } else if (impl_name == "cpp_cpu_openmp") {
+        return [](int n_clusters, int n_iters, double tol) {
+            return createKMeansCPUOpenMP(n_clusters, n_iters, tol, 0);
+        };
+    } else if (impl_name == "cpp_cuda_v1") {
         return [](int n_clusters, int n_iters, double tol) {
             return createKMeansCUDAV1(n_clusters, n_iters, tol);
         };
@@ -55,32 +105,32 @@ std::vector<std::map<std::string, std::string>> ExperimentSuite::format_result(
     result["dataset_D"] = std::to_string(dataset.D());
     result["dataset_K"] = std::to_string(dataset.K());
     
-    // Форматируем числа с достаточной точностью
+    // Форматируем числа: время в миллисекундах (ms), остальное как есть
     std::ostringstream ss;
-    ss << std::fixed << std::setprecision(9);
     
+    // Время в миллисекундах (умножаем на 1000)
     ss.str("");
-    ss << std::fixed << std::setprecision(9) << timing.T_fit_avg;
+    ss << std::fixed << std::setprecision(3) << (timing.T_fit_avg * 1000.0);
     result["T_fit_avg"] = ss.str();
     
     ss.str("");
-    ss << std::fixed << std::setprecision(9) << timing.T_fit_std;
+    ss << std::fixed << std::setprecision(3) << (timing.T_fit_std * 1000.0);
     result["T_fit_std"] = ss.str();
     
     ss.str("");
-    ss << std::fixed << std::setprecision(9) << timing.T_fit_min;
+    ss << std::fixed << std::setprecision(3) << (timing.T_fit_min * 1000.0);
     result["T_fit_min"] = ss.str();
     
     ss.str("");
-    ss << std::fixed << std::setprecision(9) << timing.T_assign_total_avg;
+    ss << std::fixed << std::setprecision(3) << (timing.T_assign_total_avg * 1000.0);
     result["T_assign_total_avg"] = ss.str();
     
     ss.str("");
-    ss << std::fixed << std::setprecision(9) << timing.T_update_total_avg;
+    ss << std::fixed << std::setprecision(3) << (timing.T_update_total_avg * 1000.0);
     result["T_update_total_avg"] = ss.str();
     
     ss.str("");
-    ss << std::fixed << std::setprecision(9) << timing.T_iter_total_avg;
+    ss << std::fixed << std::setprecision(3) << (timing.T_iter_total_avg * 1000.0);
     result["T_iter_total_avg"] = ss.str();
     
     ss.str("");
@@ -88,7 +138,7 @@ std::vector<std::map<std::string, std::string>> ExperimentSuite::format_result(
     result["throughput_ops_avg"] = ss.str();
     
     ss.str("");
-    ss << std::fixed << std::setprecision(9) << timing.T_transfer_avg;
+    ss << std::fixed << std::setprecision(3) << (timing.T_transfer_avg * 1000.0);
     result["T_transfer_avg"] = ss.str();
     
     ss.str("");
@@ -109,7 +159,7 @@ std::vector<std::map<std::string, std::string>> ExperimentSuite::run_exp1_baseli
     std::vector<std::map<std::string, std::string>> results;
     
     // Ищем датасет с N=100000, D=50, K=8
-    std::string dataset_path = "../datasets/base/N100000_D50_K8.txt";
+    std::string dataset_path = find_dataset_path("base/N100000_D50_K8.txt");
     
     try {
         Dataset dataset(dataset_path);
@@ -118,7 +168,7 @@ std::vector<std::map<std::string, std::string>> ExperimentSuite::run_exp1_baseli
             int repeats = cfg.params.at("repeats");
             int warmup = cfg.params.at("warmup");
             
-            for (const std::string& impl_name : get_gpu_implementations()) {
+            for (const std::string& impl_name : get_all_implementations()) {
                 std::cout << "Running " << impl_name << std::endl;
                 auto factory = get_implementation_factory(impl_name);
                 ExperimentRunner runner(dataset, factory);
@@ -141,10 +191,10 @@ std::vector<std::map<std::string, std::string>> ExperimentSuite::run_exp2_scalin
     
     // Список датасетов для масштабирования по N
     std::vector<std::string> dataset_paths = {
-        "../datasets/scaling_N/N1000_D50_K8.txt",
-        "../datasets/scaling_N/N100000_D50_K8.txt",
-        "../datasets/scaling_N/N1000000_D50_K8.txt",
-        "../datasets/scaling_N/N5000000_D50_K8.txt"
+        find_dataset_path("scaling_N/N1000_D50_K8.txt"),
+        find_dataset_path("scaling_N/N100000_D50_K8.txt"),
+        find_dataset_path("scaling_N/N1000000_D50_K8.txt"),
+        find_dataset_path("scaling_N/N5000000_D50_K8.txt")
     };
     
     for (const std::string& dataset_path : dataset_paths) {
@@ -155,7 +205,7 @@ std::vector<std::map<std::string, std::string>> ExperimentSuite::run_exp2_scalin
             
             std::cout << "Dataset N=" << N << ", repeats=" << repeats << std::endl;
             
-            for (const std::string& impl_name : get_gpu_implementations()) {
+            for (const std::string& impl_name : get_all_implementations()) {
                 std::cout << "  Running " << impl_name << std::endl;
                 auto factory = get_implementation_factory(impl_name);
                 ExperimentRunner runner(dataset, factory);
@@ -177,11 +227,10 @@ std::vector<std::map<std::string, std::string>> ExperimentSuite::run_exp3_scalin
     std::vector<std::map<std::string, std::string>> results;
     
     std::vector<std::string> dataset_paths = {
-        "../datasets/scaling_D/N100000_D2_K8.txt",
-        "../datasets/scaling_D/N100000_D10_K8.txt",
-        "../datasets/scaling_D/N100000_D50_K8.txt",
-        "../datasets/scaling_D/N100000_D100_K8.txt",
-        "../datasets/scaling_D/N100000_D200_K8.txt"
+        find_dataset_path("scaling_D/N100000_D2_K8.txt"),
+        find_dataset_path("scaling_D/N100000_D10_K8.txt"),
+        find_dataset_path("scaling_D/N100000_D50_K8.txt"),
+        find_dataset_path("scaling_D/N100000_D200_K8.txt")
     };
     
     for (const std::string& dataset_path : dataset_paths) {
@@ -192,7 +241,7 @@ std::vector<std::map<std::string, std::string>> ExperimentSuite::run_exp3_scalin
             
             std::cout << "Dataset D=" << D << ", repeats=" << repeats << std::endl;
             
-            for (const std::string& impl_name : get_gpu_implementations()) {
+            for (const std::string& impl_name : get_all_implementations()) {
                 std::cout << "  Running " << impl_name << std::endl;
                 auto factory = get_implementation_factory(impl_name);
                 ExperimentRunner runner(dataset, factory);
@@ -214,10 +263,10 @@ std::vector<std::map<std::string, std::string>> ExperimentSuite::run_exp4_scalin
     std::vector<std::map<std::string, std::string>> results;
     
     std::vector<std::string> dataset_paths = {
-        "../datasets/scaling_K/N100000_D50_K4.txt",
-        "../datasets/scaling_K/N100000_D50_K8.txt",
-        "../datasets/scaling_K/N100000_D50_K16.txt",
-        "../datasets/scaling_K/N100000_D50_K32.txt"
+        find_dataset_path("scaling_K/N100000_D50_K4.txt"),
+        find_dataset_path("scaling_K/N100000_D50_K8.txt"),
+        find_dataset_path("scaling_K/N100000_D50_K16.txt"),
+        find_dataset_path("scaling_K/N100000_D50_K32.txt")
     };
     
     for (const std::string& dataset_path : dataset_paths) {
@@ -228,7 +277,7 @@ std::vector<std::map<std::string, std::string>> ExperimentSuite::run_exp4_scalin
             
             std::cout << "Dataset K=" << K << ", repeats=" << repeats << std::endl;
             
-            for (const std::string& impl_name : get_gpu_implementations()) {
+            for (const std::string& impl_name : get_all_implementations()) {
                 std::cout << "  Running " << impl_name << std::endl;
                 auto factory = get_implementation_factory(impl_name);
                 ExperimentRunner runner(dataset, factory);
@@ -249,7 +298,7 @@ std::vector<std::map<std::string, std::string>> ExperimentSuite::run_exp5_gpu_pr
     ExperimentConfig cfg = get_experiment_config(ExperimentId::GPU_PROFILE);
     std::vector<std::map<std::string, std::string>> results;
     
-    std::string dataset_path = "../datasets/scaling_N/N1000000_D50_K8.txt";
+    std::string dataset_path = find_dataset_path("scaling_N/N1000000_D50_K8.txt");
     int repeats = cfg.params.at("repeats");
     
     try {
@@ -258,7 +307,7 @@ std::vector<std::map<std::string, std::string>> ExperimentSuite::run_exp5_gpu_pr
         if (dataset.N() == 1000000 && dataset.D() == 50 && dataset.K() == 8) {
             std::cout << "GPU Profile: N=" << dataset.N() << ", repeats=" << repeats << std::endl;
             
-            for (const std::string& impl_name : get_gpu_implementations()) {
+            for (const std::string& impl_name : get_all_implementations()) {
                 std::cout << "  Running " << impl_name << std::endl;
                 auto factory = get_implementation_factory(impl_name);
                 ExperimentRunner runner(dataset, factory);
